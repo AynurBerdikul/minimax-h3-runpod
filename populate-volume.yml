@@ -46,7 +46,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --disable-pip-version-check boto3 requests
       - name: Upload or resume ${{ matrix.label }}
-        run: python tools/populate_volume.py --file "${{ matrix.file }}"
+        run: python tools/populate_volume.py --file "${{ matrix.file }}" --inspect-only
 
   verify:
     needs: upload
