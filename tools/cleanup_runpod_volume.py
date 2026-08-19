@@ -1,19 +1,31 @@
 from __future__ import annotations
 import argparse, json, os
 from pathlib import Path
+
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = json.loads((ROOT / "model_manifest.json").read_text(encoding="utf-8"))
-EXPECTED = {f"models/{x['path']}": int(x["size"]) for x in MANIFEST["files"]}
+MANIFEST = json.loads(
+    (ROOT / "model_manifest.json").read_text(encoding="utf-8")
+)
+EXPECTED = {
+    f"models/{x['path']}": int(x["size"])
+    for x in MANIFEST["files"]
+}
+
 
 def need(name):
-    v = os.getenv(name)
-    if not v:
+    value = os.getenv(name)
+    if not value:
         raise SystemExit(f"Missing environment variable: {name}")
-    return v
+    return value
+
+
+def normalize_key(key):
+    # RunPod can return multipart keys with a leading "/".
+    return key.lstrip("/")
+
 
 def s3_client():
     return boto3.client(
@@ -29,148 +41,262 @@ def s3_client():
         ),
     )
 
+
 def list_objects(s3, bucket):
-    out, token = [], None
+    result = []
+    token = None
+
     while True:
-        kw = {"Bucket": bucket}
+        kwargs = {"Bucket": bucket}
+
         if token:
-            kw["ContinuationToken"] = token
-        r = s3.list_objects_v2(**kw)
-        out.extend(r.get("Contents", []))
-        if not r.get("IsTruncated"):
-            return out
-        token = r.get("NextContinuationToken")
+            kwargs["ContinuationToken"] = token
+
+        response = s3.list_objects_v2(**kwargs)
+        result.extend(response.get("Contents", []))
+
+        if not response.get("IsTruncated"):
+            return result
+
+        token = response["NextContinuationToken"]
+
 
 def list_uploads(s3, bucket):
-    out = []
+    result = []
     key_marker = None
-    upload_id_marker = None
+    upload_marker = None
+
     while True:
-        kw = {"Bucket": bucket}
+        kwargs = {"Bucket": bucket}
+
         if key_marker:
-            kw["KeyMarker"] = key_marker
-        if upload_id_marker:
-            kw["UploadIdMarker"] = upload_id_marker
-        r = s3.list_multipart_uploads(**kw)
-        out.extend(r.get("Uploads", []))
-        if not r.get("IsTruncated"):
-            return out
-        key_marker = r.get("NextKeyMarker")
-        upload_id_marker = r.get("NextUploadIdMarker")
+            kwargs["KeyMarker"] = key_marker
 
-def list_parts(s3, bucket, key, upload_id):
-    out, marker = [], None
+        if upload_marker:
+            kwargs["UploadIdMarker"] = upload_marker
+
+        response = s3.list_multipart_uploads(**kwargs)
+        result.extend(response.get("Uploads", []))
+
+        if not response.get("IsTruncated"):
+            return result
+
+        key_marker = response.get("NextKeyMarker")
+        upload_marker = response.get("NextUploadIdMarker")
+
+
+def list_parts(s3, bucket, raw_key, upload_id):
+    result = []
+    marker = None
+
     while True:
-        kw = {"Bucket": bucket, "Key": key, "UploadId": upload_id}
-        if marker is not None:
-            kw["PartNumberMarker"] = marker
-        r = s3.list_parts(**kw)
-        out.extend(r.get("Parts", []))
-        if not r.get("IsTruncated"):
-            return out
-        marker = r.get("NextPartNumberMarker")
+        kwargs = {
+            "Bucket": bucket,
+            "Key": raw_key,
+            "UploadId": upload_id,
+        }
 
-def gib(n):
-    return n / 1024**3
+        if marker is not None:
+            kwargs["PartNumberMarker"] = marker
+
+        response = s3.list_parts(**kwargs)
+        result.extend(response.get("Parts", []))
+
+        if not response.get("IsTruncated"):
+            return result
+
+        marker = response.get("NextPartNumberMarker")
+
+
+def gib(value):
+    return value / 1024**3
+
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true",
-                    help="Actually abort stale/duplicate multipart uploads.")
-    ap.add_argument("--delete-wrong-size", action="store_true",
-                    help="Also delete completed expected objects with wrong size.")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--apply", action="store_true")
+    args = parser.parse_args()
 
     s3 = s3_client()
     bucket = need("RUNPOD_VOLUME_ID")
 
     objects = list_objects(s3, bucket)
-    obj_map = {o["Key"]: int(o["Size"]) for o in objects}
+
+    obj_map = {
+        normalize_key(obj["Key"]): int(obj["Size"])
+        for obj in objects
+    }
 
     print("\nCOMPLETED OBJECTS")
+
     completed_bytes = 0
-    wrong_size = []
-    for key, expected in EXPECTED.items():
-        actual = obj_map.get(key)
-        if actual is None:
-            print(f"MISSING  {key}")
-        elif actual == expected:
-            print(f"KEEP     {gib(actual):6.2f} GiB  {key}")
-            completed_bytes += actual
+
+    for key, expected_size in EXPECTED.items():
+        actual_size = obj_map.get(key)
+
+        if actual_size is None:
+            print("MISSING ", key)
+
+        elif actual_size == expected_size:
+            print(
+                f"KEEP    {gib(actual_size):6.2f} GiB  {key}"
+            )
+            completed_bytes += actual_size
+
         else:
-            print(f"WRONG    {gib(actual):6.2f} GiB  expected {gib(expected):.2f}  {key}")
-            completed_bytes += actual
-            wrong_size.append(key)
+            print(
+                f"WRONG   {gib(actual_size):6.2f} GiB "
+                f"expected {gib(expected_size):.2f}  {key}"
+            )
+            completed_bytes += actual_size
 
     uploads = list_uploads(s3, bucket)
-    by_key = {}
+
+    grouped = {}
     multipart_bytes = 0
 
-    print("\nUNFINISHED MULTIPART UPLOADS")
-    for u in uploads:
-        key = u["Key"]
-        uid = u["UploadId"]
-        parts = list_parts(s3, bucket, key, uid)
+    for upload in uploads:
+
+        raw_key = upload["Key"]
+        key = normalize_key(raw_key)
+
+        parts = list_parts(
+            s3,
+            bucket,
+            raw_key,
+            upload["UploadId"],
+        )
+
         size = sum(int(p["Size"]) for p in parts)
+
         multipart_bytes += size
-        by_key.setdefault(key, []).append((u, size, len(parts)))
+
+        grouped.setdefault(key, []).append(
+            (
+                upload,
+                raw_key,
+                size,
+                len(parts),
+            )
+        )
 
     abort = []
-    resume = []
 
-    for key, items in by_key.items():
-        # newest first
-        items.sort(key=lambda x: x[0].get("Initiated"), reverse=True)
-        completed_exact = key in EXPECTED and obj_map.get(key) == EXPECTED[key]
+    print("\nMULTIPART UPLOADS")
 
+    for key, items in grouped.items():
+
+        items.sort(
+            key=lambda x: x[0].get("Initiated"),
+            reverse=True,
+        )
+
+        completed_exact = (
+            key in EXPECTED
+            and obj_map.get(key) == EXPECTED[key]
+        )
+
+        # Completed correct file already exists.
+        # Every multipart for it is garbage.
         if completed_exact:
-            for u, size, n in items:
-                print(f"ABORT    {gib(size):6.2f} GiB  {n:4d} parts  completed object already exists  {key}")
-                abort.append((key, u["UploadId"]))
+
+            for upload, raw_key, size, count in items:
+
+                print(
+                    f"ABORT   {gib(size):6.2f} GiB "
+                    f"{count:4d} parts  {key}"
+                )
+
+                abort.append(
+                    (raw_key, upload["UploadId"], size)
+                )
+
             continue
 
+        # Missing expected model:
+        # preserve newest multipart and remove duplicates.
         if key in EXPECTED:
-            # Keep only newest unfinished upload for resume.
+
             newest = items[0]
-            u, size, n = newest
-            print(f"RESUME   {gib(size):6.2f} GiB  {n:4d} parts  {key}")
-            resume.append((key, u["UploadId"], size))
-            for u, size, n in items[1:]:
-                print(f"ABORT    {gib(size):6.2f} GiB  {n:4d} parts  duplicate/stale  {key}")
-                abort.append((key, u["UploadId"]))
+
+            upload, raw_key, size, count = newest
+
+            print(
+                f"RESUME  {gib(size):6.2f} GiB "
+                f"{count:4d} parts  {key}"
+            )
+
+            for upload, raw_key, size, count in items[1:]:
+
+                print(
+                    f"ABORT   {gib(size):6.2f} GiB "
+                    f"{count:4d} parts duplicate  {key}"
+                )
+
+                abort.append(
+                    (raw_key, upload["UploadId"], size)
+                )
+
         else:
-            # Unknown keys are never destroyed automatically.
-            for u, size, n in items:
-                print(f"UNKNOWN  {gib(size):6.2f} GiB  {n:4d} parts  {key}")
 
-    print("\nQUOTA ACCOUNTING (approximate)")
-    print(f"Completed objects:   {gib(completed_bytes):.2f} GiB")
-    print(f"Multipart parts:     {gib(multipart_bytes):.2f} GiB")
-    print(f"Approx total stored: {gib(completed_bytes + multipart_bytes):.2f} GiB")
-    print(f"Expected final H3:   {gib(sum(EXPECTED.values())):.2f} GiB")
+            for upload, raw_key, size, count in items:
 
-    if wrong_size:
-        print("\nWRONG-SIZE COMPLETED OBJECTS")
-        for key in wrong_size:
-            print(" ", key)
+                print(
+                    f"UNKNOWN {gib(size):6.2f} GiB "
+                    f"{count:4d} parts  {raw_key}"
+                )
+
+    free_bytes = sum(x[2] for x in abort)
+
+    print("\nSTORAGE")
+
+    print(
+        f"Completed:       {gib(completed_bytes):.2f} GiB"
+    )
+
+    print(
+        f"Multipart:       {gib(multipart_bytes):.2f} GiB"
+    )
+
+    print(
+        f"Current approx:  "
+        f"{gib(completed_bytes + multipart_bytes):.2f} GiB"
+    )
+
+    print(
+        f"Will free:       {gib(free_bytes):.2f} GiB"
+    )
+
+    print(
+        f"After cleanup:   "
+        f"{gib(completed_bytes + multipart_bytes - free_bytes):.2f} GiB"
+    )
 
     if not args.apply:
-        print("\nDRY RUN ONLY. Nothing was deleted.")
-        print("Run again with --apply to abort only the ABORT entries above.")
+
+        print("\nDRY RUN — NOTHING DELETED")
+        print("Run with --apply after checking ABORT/RESUME.")
         return
 
-    print("\nAPPLYING CLEANUP")
-    for key, uid in abort:
-        print("Aborting:", key, uid)
-        s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=uid)
+    print("\nCLEANING")
 
-    if args.delete_wrong_size:
-        for key in wrong_size:
-            print("Deleting wrong-size object:", key)
-            s3.delete_object(Bucket=bucket, Key=key)
+    for raw_key, upload_id, size in abort:
 
-    print("\nCleanup complete.")
-    print("Useful newest multipart uploads for missing files were preserved for resume.")
+        print(
+            f"Deleting multipart {gib(size):.2f} GiB:",
+            raw_key,
+        )
+
+        s3.abort_multipart_upload(
+            Bucket=bucket,
+            Key=raw_key,
+            UploadId=upload_id,
+        )
+
+    print("\nDONE")
+    print("Completed files preserved.")
+    print("Newest resumable multipart uploads preserved.")
+
 
 if __name__ == "__main__":
     main()
