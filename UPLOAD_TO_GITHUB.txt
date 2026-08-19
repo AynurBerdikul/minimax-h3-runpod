@@ -1,0 +1,4 @@
+Upload the CONTENTS of this folder to:
+AynurBerdikul/minimax-h3-runpod
+
+Then open GitHub -> Actions -> Build H3 RunPod image.
