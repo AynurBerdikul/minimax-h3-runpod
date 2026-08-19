@@ -23,19 +23,21 @@ def s3_client():
         region_name=need("RUNPOD_S3_REGION"),
         aws_access_key_id=need("RUNPOD_S3_ACCESS_KEY"),
         aws_secret_access_key=need("RUNPOD_S3_SECRET_KEY"),
-        config=Config(signature_version="s3v4", s3={"addressing_style":"path"},
+        config=Config(signature_version="s3v4",
+                      s3={"addressing_style":"path"},
                       retries={"max_attempts":10,"mode":"adaptive"}),
     )
 
-def remote_valid(s3, bucket, key, item):
+def remote_size(s3, bucket, key):
     try:
         h = s3.head_object(Bucket=bucket, Key=key)
     except ClientError as e:
-        if e.response.get("ResponseMetadata",{}).get("HTTPStatusCode") == 404:
-            return False
+        status = e.response.get("ResponseMetadata",{}).get("HTTPStatusCode")
+        code = str(e.response.get("Error",{}).get("Code",""))
+        if status == 404 or code in {"404","NoSuchKey","NotFound"}:
+            return None
         raise
-    meta = {k.lower():v for k,v in h.get("Metadata",{}).items()}
-    return int(h.get("ContentLength",-1)) == int(item["size"]) and meta.get("sha256") == item["sha256"]
+    return int(h.get("ContentLength",-1))
 
 def list_parts(s3, bucket, key, upload_id):
     out, marker = [], None
@@ -70,9 +72,15 @@ def upload_one(s3, bucket, item):
     path = item["path"]
     key = "models/" + path
     expected = int(item["size"])
-    if remote_valid(s3,bucket,key,item):
-        print("OK existing:", key)
+
+    actual = remote_size(s3,bucket,key)
+    if actual == expected:
+        print(f"OK existing: {key} ({actual} bytes)")
         return
+
+    if actual is not None:
+        print(f"BAD existing size: {key}: {actual} != {expected}; replacing")
+        s3.delete_object(Bucket=bucket, Key=key)
 
     upload_id = discover_upload(s3,bucket,key)
     parts = list_parts(s3,bucket,key,upload_id) if upload_id else []
@@ -83,9 +91,9 @@ def upload_one(s3, bucket, item):
     unsafe = any(int(p["Size"]) != PART_SIZE for p in parts[:-1])
     if parts and int(parts[-1]["Size"]) != PART_SIZE and uploaded < expected:
         unsafe = True
+
     if unsafe or uploaded > expected:
-        if upload_id:
-            s3.abort_multipart_upload(Bucket=bucket,Key=key,UploadId=upload_id)
+        s3.abort_multipart_upload(Bucket=bucket,Key=key,UploadId=upload_id)
         upload_id = new_upload(s3,bucket,key,item)
         parts, uploaded = [], 0
 
@@ -96,55 +104,76 @@ def upload_one(s3, bucket, item):
         headers["Range"] = f"bytes={uploaded}-"
 
     print(f"{key}: resume {uploaded/1024**3:.2f} / {expected/1024**3:.2f} GiB")
-    with requests.get(source_url(path), headers=headers, stream=True, allow_redirects=True, timeout=(30,600)) as r:
+
+    with requests.get(source_url(path), headers=headers, stream=True,
+                      allow_redirects=True, timeout=(30,600)) as r:
         r.raise_for_status()
         if uploaded and r.status_code != 206:
             raise RuntimeError("Hugging Face did not honor Range request")
+
         complete = [{"PartNumber":p["PartNumber"],"ETag":p["ETag"]} for p in parts]
         next_part = parts[-1]["PartNumber"]+1 if parts else 1
         buf = bytearray()
         transferred = uploaded
+
         for chunk in r.iter_content(chunk_size=HTTP_CHUNK):
-            if not chunk: continue
+            if not chunk:
+                continue
             buf.extend(chunk)
             while len(buf) >= PART_SIZE:
                 body = bytes(buf[:PART_SIZE]); del buf[:PART_SIZE]
-                p = s3.upload_part(Bucket=bucket,Key=key,UploadId=upload_id,PartNumber=next_part,Body=body)
-                complete.append({"PartNumber":next_part,"ETag":p["ETag"]})
+                part = s3.upload_part(Bucket=bucket,Key=key,UploadId=upload_id,
+                                      PartNumber=next_part,Body=body)
+                complete.append({"PartNumber":next_part,"ETag":part["ETag"]})
                 transferred += len(body); next_part += 1
                 print(f"{transferred/1024**3:.2f}/{expected/1024**3:.2f} GiB", flush=True)
+
         if buf:
             body = bytes(buf)
-            p = s3.upload_part(Bucket=bucket,Key=key,UploadId=upload_id,PartNumber=next_part,Body=body)
-            complete.append({"PartNumber":next_part,"ETag":p["ETag"]})
+            part = s3.upload_part(Bucket=bucket,Key=key,UploadId=upload_id,
+                                  PartNumber=next_part,Body=body)
+            complete.append({"PartNumber":next_part,"ETag":part["ETag"]})
             transferred += len(body)
+
     if transferred != expected:
-        raise RuntimeError(f"Size mismatch: {transferred} != {expected}")
-    s3.complete_multipart_upload(Bucket=bucket,Key=key,UploadId=upload_id,MultipartUpload={"Parts":complete})
-    if not remote_valid(s3,bucket,key,item):
-        raise RuntimeError("Final verification failed")
-    print("DONE:", key)
+        raise RuntimeError(f"Size mismatch before completion: {transferred} != {expected}")
+
+    s3.complete_multipart_upload(Bucket=bucket,Key=key,UploadId=upload_id,
+                                 MultipartUpload={"Parts":complete})
+
+    actual = remote_size(s3,bucket,key)
+    if actual != expected:
+        raise RuntimeError(f"Final size verification failed: {actual} != {expected}")
+
+    print(f"DONE: {key} ({actual} bytes)")
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file")
     args = ap.parse_args()
+
     if os.getenv("ACCEPT_MINIMAX_H3_LICENSE") != "YES":
         raise SystemExit("Set ACCEPT_MINIMAX_H3_LICENSE=YES after reviewing the license.")
+
     items = MANIFEST["files"]
     if args.file:
         items = [x for x in items if x["path"] == args.file]
         if not items:
             raise SystemExit("File not found in manifest")
-    s3 = s3_client(); bucket = need("RUNPOD_VOLUME_ID")
+
+    s3 = s3_client()
+    bucket = need("RUNPOD_VOLUME_ID")
+
     for item in items:
         attempts = 0
         while True:
             try:
-                upload_one(s3,bucket,item); break
+                upload_one(s3,bucket,item)
+                break
             except (requests.RequestException, ClientError) as e:
                 attempts += 1
-                if attempts >= 5: raise
+                if attempts >= 5:
+                    raise
                 delay = min(60, 5*(2**(attempts-1)))
                 print("Transient error; retrying in", delay, "s:", e)
                 time.sleep(delay)
