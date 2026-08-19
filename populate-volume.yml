@@ -1,0 +1,67 @@
+name: Populate MiniMax H3 Network Volume
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: populate-minimax-h3-volume
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - label: FL2VA
+            file: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
+          - label: REF2VA
+            file: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
+          - label: Qwen
+            file: text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
+          - label: VideoVAE
+            file: vae/minimax_h3_video_vae_fp16.safetensors
+          - label: AudioVAE
+            file: vae/minimax_h3_audio_vae_fp32.safetensors
+
+    env:
+      RUNPOD_S3_ACCESS_KEY: ${{ secrets.RUNPOD_S3_ACCESS_KEY }}
+      RUNPOD_S3_SECRET_KEY: ${{ secrets.RUNPOD_S3_SECRET_KEY }}
+      RUNPOD_VOLUME_ID: ${{ secrets.RUNPOD_VOLUME_ID }}
+      RUNPOD_S3_ENDPOINT: ${{ secrets.RUNPOD_S3_ENDPOINT }}
+      RUNPOD_S3_REGION: ${{ secrets.RUNPOD_S3_REGION }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      ACCEPT_MINIMAX_H3_LICENSE: "YES"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check boto3 requests
+      - name: Upload or resume ${{ matrix.label }}
+        run: python tools/populate_volume.py --file "${{ matrix.file }}"
+
+  verify:
+    needs: upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUNPOD_S3_ACCESS_KEY: ${{ secrets.RUNPOD_S3_ACCESS_KEY }}
+      RUNPOD_S3_SECRET_KEY: ${{ secrets.RUNPOD_S3_SECRET_KEY }}
+      RUNPOD_VOLUME_ID: ${{ secrets.RUNPOD_VOLUME_ID }}
+      RUNPOD_S3_ENDPOINT: ${{ secrets.RUNPOD_S3_ENDPOINT }}
+      RUNPOD_S3_REGION: ${{ secrets.RUNPOD_S3_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check boto3
+      - run: python tools/verify_volume.py
