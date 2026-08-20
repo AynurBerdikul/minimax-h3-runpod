@@ -1,0 +1,4 @@
+Official current MiniMax H3 reference-to-video workflow:
+https://raw.githubusercontent.com/Comfy-Org/workflow_templates/main/templates/video_minimax_h3_r2v.json
+
+Use the current official workflow. The source itself lists the required model files and ends with SaveVideo.
