@@ -52,6 +52,14 @@ def s3_client():
     )
 
 
+def preflight(s3, bucket: str) -> None:
+    # Prove that the exact GitHub credentials/endpoint/bucket are valid before
+    # attempting a multipart write. If this succeeds and CreateMultipartUpload
+    # fails, the issue is request compatibility rather than credentials.
+    s3.list_objects_v2(Bucket=bucket, Prefix="models/", MaxKeys=1)
+    print("S3 preflight OK", flush=True)
+
+
 def remote_size(s3, bucket: str, key: str) -> int | None:
     try:
         response = s3.head_object(Bucket=bucket, Key=key)
@@ -84,7 +92,13 @@ def source_size(url: str, headers: dict[str, str]) -> int:
 
     probe_headers = dict(headers)
     probe_headers["Range"] = "bytes=0-0"
-    with requests.get(url, headers=probe_headers, stream=True, allow_redirects=True, timeout=(30, 120)) as probe:
+    with requests.get(
+        url,
+        headers=probe_headers,
+        stream=True,
+        allow_redirects=True,
+        timeout=(30, 120),
+    ) as probe:
         probe.raise_for_status()
         content_range = probe.headers.get("Content-Range", "")
         if "/" in content_range:
@@ -101,7 +115,11 @@ def list_parts(s3, bucket: str, key: str, upload_id: str) -> list[dict[str, Any]
     result: list[dict[str, Any]] = []
     marker = None
     while True:
-        kwargs: dict[str, Any] = {"Bucket": bucket, "Key": key, "UploadId": upload_id}
+        kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Key": key,
+            "UploadId": upload_id,
+        }
         if marker is not None:
             kwargs["PartNumberMarker"] = marker
         response = s3.list_parts(**kwargs)
@@ -110,18 +128,36 @@ def list_parts(s3, bucket: str, key: str, upload_id: str) -> list[dict[str, Any]
             return sorted(result, key=lambda part: int(part["PartNumber"]))
         marker = response.get("NextPartNumberMarker")
         if marker is None:
-            raise RuntimeError("Truncated multipart part listing without continuation marker")
+            raise RuntimeError(
+                "Truncated multipart part listing without continuation marker"
+            )
 
 
 def multipart_candidates(s3, bucket: str, key: str) -> list[dict[str, Any]]:
-    response = s3.list_multipart_uploads(Bucket=bucket, Prefix=key)
-    return [
-        item for item in response.get("Uploads", [])
-        if str(item.get("Key") or "").lstrip("/") == key.lstrip("/")
-    ]
+    candidates: list[dict[str, Any]] = []
+    key_marker = None
+    upload_marker = None
+    while True:
+        kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": key}
+        if key_marker:
+            kwargs["KeyMarker"] = key_marker
+        if upload_marker:
+            kwargs["UploadIdMarker"] = upload_marker
+        response = s3.list_multipart_uploads(**kwargs)
+        for item in response.get("Uploads", []):
+            if str(item.get("Key") or "").lstrip("/") == key.lstrip("/"):
+                candidates.append(item)
+        if not response.get("IsTruncated"):
+            return candidates
+        key_marker = response.get("NextKeyMarker")
+        upload_marker = response.get("NextUploadIdMarker")
+        if not key_marker and not upload_marker:
+            return candidates
 
 
-def discover_upload(s3, bucket: str, key: str, total: int) -> tuple[str | None, list[dict[str, Any]]]:
+def discover_upload(
+    s3, bucket: str, key: str, total: int
+) -> tuple[str | None, list[dict[str, Any]]]:
     ranked: list[tuple[int, str, list[dict[str, Any]]]] = []
     for item in multipart_candidates(s3, bucket, key):
         upload_id = str(item.get("UploadId") or "")
@@ -134,7 +170,9 @@ def discover_upload(s3, bucket: str, key: str, total: int) -> tuple[str | None, 
         uploaded = sum(int(part.get("Size", 0)) for part in parts)
         safe = uploaded <= total
         if parts and uploaded < total:
-            safe = safe and all(int(part.get("Size", 0)) == PART_SIZE for part in parts)
+            safe = safe and all(
+                int(part.get("Size", 0)) == PART_SIZE for part in parts
+            )
         if safe:
             ranked.append((uploaded, upload_id, parts))
     if not ranked:
@@ -144,18 +182,18 @@ def discover_upload(s3, bucket: str, key: str, total: int) -> tuple[str | None, 
     return upload_id, parts
 
 
-def create_upload(s3, bucket: str, key: str, repo_id: str, revision: str) -> str:
-    created = s3.create_multipart_upload(
-        Bucket=bucket,
-        Key=key,
-        ContentType="application/octet-stream",
-        Metadata={"source_repo": repo_id, "source_revision": revision},
-    )
+def create_upload(s3, bucket: str, key: str) -> str:
+    # Deliberately match RunPod's official multipart S3 example: only Bucket
+    # and Key. Optional ContentType/Metadata become signed x-amz headers and
+    # are unnecessary for model blobs.
+    created = s3.create_multipart_upload(Bucket=bucket, Key=key)
     return str(created["UploadId"])
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Stream one Hugging Face model directly to a RunPod Network Volume.")
+    parser = argparse.ArgumentParser(
+        description="Stream one Hugging Face model directly to a RunPod Network Volume."
+    )
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--revision", default="main")
     parser.add_argument("--path", required=True)
@@ -173,9 +211,16 @@ def main() -> None:
     print(f"Destination: s3://{bucket}/{key}")
     print(f"Expected size: {total} bytes ({total / 1024**3:.2f} GiB)")
 
+    preflight(s3, bucket)
+
     existing = remote_size(s3, bucket, key)
     if existing == total:
-        print(json.dumps({"status": "existing", "path": path, "key": key, "size": existing}, sort_keys=True))
+        print(json.dumps({
+            "status": "existing",
+            "path": path,
+            "key": key,
+            "size": existing,
+        }, sort_keys=True))
         return
     if existing is not None:
         print(f"Replacing incomplete/wrong-size final object: {existing} bytes")
@@ -183,7 +228,7 @@ def main() -> None:
 
     upload_id, parts = discover_upload(s3, bucket, key, total)
     if not upload_id:
-        upload_id = create_upload(s3, bucket, key, args.repo_id, args.revision)
+        upload_id = create_upload(s3, bucket, key)
         parts = []
 
     uploaded_bytes = sum(int(part["Size"]) for part in parts)
@@ -192,46 +237,81 @@ def main() -> None:
         request_headers["Range"] = f"bytes={uploaded_bytes}-"
 
     digest = hashlib.sha256() if uploaded_bytes == 0 else None
-    completed = [{"PartNumber": int(p["PartNumber"]), "ETag": p["ETag"]} for p in parts]
+    completed = [
+        {"PartNumber": int(p["PartNumber"]), "ETag": p["ETag"]}
+        for p in parts
+    ]
     next_part = int(parts[-1]["PartNumber"]) + 1 if parts else 1
     transferred = uploaded_bytes
     buffer = bytearray()
 
-    print(f"Resume: {uploaded_bytes / 1024**3:.2f} / {total / 1024**3:.2f} GiB")
-    with requests.get(url, headers=request_headers, stream=True, allow_redirects=True, timeout=(30, 600)) as response:
+    print(
+        f"Resume: {uploaded_bytes / 1024**3:.2f} / "
+        f"{total / 1024**3:.2f} GiB"
+    )
+
+    with requests.get(
+        url,
+        headers=request_headers,
+        stream=True,
+        allow_redirects=True,
+        timeout=(30, 600),
+    ) as response:
         response.raise_for_status()
         if uploaded_bytes and response.status_code != 206:
-            raise RuntimeError("Hugging Face did not honor the resume Range request")
+            raise RuntimeError(
+                "Hugging Face did not honor the resume Range request"
+            )
+
         for chunk in response.iter_content(chunk_size=HTTP_CHUNK):
             if not chunk:
                 continue
             if digest is not None:
                 digest.update(chunk)
             buffer.extend(chunk)
+
             while len(buffer) >= PART_SIZE:
                 body = bytes(buffer[:PART_SIZE])
                 del buffer[:PART_SIZE]
                 result = s3.upload_part(
-                    Bucket=bucket, Key=key, UploadId=upload_id,
-                    PartNumber=next_part, Body=body,
+                    Bucket=bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                    PartNumber=next_part,
+                    Body=body,
                 )
-                completed.append({"PartNumber": next_part, "ETag": result["ETag"]})
+                completed.append({
+                    "PartNumber": next_part,
+                    "ETag": result["ETag"],
+                })
                 next_part += 1
                 transferred += len(body)
-                print(f"{transferred / 1024**3:.2f}/{total / 1024**3:.2f} GiB", flush=True)
+                print(
+                    f"{transferred / 1024**3:.2f}/"
+                    f"{total / 1024**3:.2f} GiB",
+                    flush=True,
+                )
 
         if buffer:
             body = bytes(buffer)
             result = s3.upload_part(
-                Bucket=bucket, Key=key, UploadId=upload_id,
-                PartNumber=next_part, Body=body,
+                Bucket=bucket,
+                Key=key,
+                UploadId=upload_id,
+                PartNumber=next_part,
+                Body=body,
             )
-            completed.append({"PartNumber": next_part, "ETag": result["ETag"]})
+            completed.append({
+                "PartNumber": next_part,
+                "ETag": result["ETag"],
+            })
             transferred += len(body)
 
     if transferred != total:
-        # Intentionally leave multipart open: the next run resumes it.
-        raise RuntimeError(f"Transfer size mismatch: {transferred} != {total}; multipart preserved for resume")
+        raise RuntimeError(
+            f"Transfer size mismatch: {transferred} != {total}; "
+            "multipart preserved for resume"
+        )
 
     s3.complete_multipart_upload(
         Bucket=bucket,
@@ -239,9 +319,12 @@ def main() -> None:
         UploadId=upload_id,
         MultipartUpload={"Parts": completed},
     )
+
     final_size = remote_size(s3, bucket, key)
     if final_size != total:
-        raise RuntimeError(f"Final RunPod object size mismatch: {final_size} != {total}")
+        raise RuntimeError(
+            f"Final RunPod object size mismatch: {final_size} != {total}"
+        )
 
     result = {
         "status": "uploaded",
