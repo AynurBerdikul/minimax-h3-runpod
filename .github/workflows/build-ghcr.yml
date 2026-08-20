@@ -1,4 +1,4 @@
-name: Build H3 RunPod image
+name: Build and deploy H3 RunPod image
 
 on:
   workflow_dispatch:
@@ -8,20 +8,38 @@ on:
     paths:
       - "Dockerfile"
       - "scripts/**"
+      - "remote/**"
+      - "tools/deploy_endpoint_image.py"
       - "extra_model_paths.yaml"
+      - "model_manifest.json"
       - ".github/workflows/build-ghcr.yml"
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: build-deploy-h3-runpod
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+      RUNPOD_ENDPOINT_ID: v4a23liws2f9jg
+      RUNPOD_IMAGE_NAME: ghcr.io/aynurberdikul/minimax-h3-runpod:${{ github.sha }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Static Python checks
+        run: |
+          python -m py_compile \
+            remote/handler-h3.py \
+            scripts/validate_volume.py \
+            tools/deploy_endpoint_image.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -33,20 +51,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/minimax-h3-runpod
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-
-
-      - name: Build and push
+      - name: Build and push immutable image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/aynurberdikul/minimax-h3-runpod:${{ github.sha }}
+            ghcr.io/aynurberdikul/minimax-h3-runpod:latest
+
+      - name: Deploy immutable image to existing RunPod endpoint
+        if: ${{ env.RUNPOD_API_KEY != '' }}
+        run: |
+          python -m pip install --disable-pip-version-check requests
+          python tools/deploy_endpoint_image.py
+
+      - name: Deployment secret missing
+        if: ${{ env.RUNPOD_API_KEY == '' }}
+        run: |
+          echo "Image built successfully, but RUNPOD_API_KEY GitHub secret is missing."
+          echo "Add it once so future builds update the existing endpoint automatically."
+          exit 1
