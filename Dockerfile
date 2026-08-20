@@ -17,7 +17,13 @@ COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
 COPY model_manifest.json /opt/h3/model_manifest.json
 COPY scripts /opt/h3/scripts
 
-RUN chmod +x /opt/h3/scripts/entrypoint-h3.sh
+# Replace the stock image-only handler with a generic saved-media handler.
+# It returns small descriptors while large video/audio/image artifacts are
+# copied to the attached Network Volume for the local ComfyUI bridge to fetch.
+COPY remote/handler-h3.py /handler.py
+
+RUN chmod +x /opt/h3/scripts/entrypoint-h3.sh \
+    && python -m py_compile /handler.py /opt/h3/scripts/validate_volume.py
 
 ENV H3_MODEL_ROOT=/runpod-volume/models
 ENV PYTHONUNBUFFERED=1
