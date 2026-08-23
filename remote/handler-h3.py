@@ -26,6 +26,8 @@ COMFY_START_TIMEOUT = int(os.getenv("H3_COMFY_START_TIMEOUT", "180"))
 POLL_SECONDS = float(os.getenv("H3_HISTORY_POLL_SECONDS", "1.0"))
 JOB_TIMEOUT = int(os.getenv("H3_JOB_TIMEOUT_SECONDS", "3300"))
 STALE_TTL_SECONDS = int(os.getenv("H3_STALE_ARTIFACT_TTL_SECONDS", str(24 * 60 * 60)))
+ARTIFACT_WAIT_SECONDS = float(os.getenv("H3_ARTIFACT_WAIT_SECONDS", "20"))
+ARTIFACT_POLL_SECONDS = float(os.getenv("H3_ARTIFACT_POLL_SECONDS", "1"))
 
 
 def _inside(base: Path, candidate: Path) -> bool:
@@ -239,15 +241,47 @@ def _comfy_saved_path(item: dict[str, str]) -> Path:
     return source
 
 
+def _find_actual_saved_path(item: dict[str, str]) -> Path | None:
+    """Resolve Comfy metadata to an existing file without guessing a filename."""
+    reported = _comfy_saved_path(item)
+    if reported.is_file():
+        return reported
+
+    folder_type = item.get("type", "output")
+    base = COMFY_OUTPUT if folder_type == "output" else COMFY_TEMP
+    filename = Path(item["filename"]).name
+    if not base.is_dir():
+        return None
+
+    matches = [path.resolve() for path in base.rglob(filename) if path.is_file()]
+    matches = [path for path in matches if _inside(base, path)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _wait_for_saved_path(item: dict[str, str]) -> Path:
+    deadline = time.time() + max(0.0, ARTIFACT_WAIT_SECONDS)
+    while True:
+        source = _find_actual_saved_path(item)
+        if source is not None and source.stat().st_size > 0:
+            return source
+        if time.time() >= deadline:
+            reported = _comfy_saved_path(item)
+            raise FileNotFoundError(
+                "ComfyUI history reported an artifact, but no non-empty file appeared "
+                f"within {ARTIFACT_WAIT_SECONDS:g}s: {reported}"
+            )
+        time.sleep(max(0.1, ARTIFACT_POLL_SECONDS))
+
+
 def _copy_comfy_result(item: dict[str, str], dest: Path) -> tuple[int, str]:
-    source = _comfy_saved_path(item)
-    if not source.is_file():
-        raise FileNotFoundError(f"ComfyUI saved output is missing: {source}")
+    source = _wait_for_saved_path(item)
     size = source.stat().st_size
-    if size <= 0:
-        raise RuntimeError(f"ComfyUI saved an empty artifact: {source}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, dest)
+    if not dest.is_file() or dest.stat().st_size <= 0:
+        raise RuntimeError(f"Copied artifact is missing or empty: {dest}")
     content_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
     return size, content_type
 
