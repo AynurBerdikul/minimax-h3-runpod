@@ -8,10 +8,8 @@ import re
 import shutil
 import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import runpod
@@ -23,46 +21,6 @@ COMFY_TEMP = Path(os.getenv("COMFY_TEMP_DIR", "/comfyui/temp")).resolve()
 VOLUME_ROOT = Path(os.getenv("RUNPOD_VOLUME_ROOT", "/runpod-volume")).resolve()
 RESULT_ROOT = (VOLUME_ROOT / "runpod-results").resolve()
 INPUT_ROOT = (VOLUME_ROOT / "runpod-inputs").resolve()
-TEXT_ARTIFACT_PREFIX = "OPENH3IR_ARTIFACT:"
-ALLOWED_TEXT_ARTIFACTS = {
-    "raw_prompt.txt",
-    "compiled_prompt.txt",
-    "compile_report.txt",
-    "generation_metadata.json",
-}
-
-
-def _safe_endpoint_for_log(value: str) -> str:
-    try:
-        parsed = urlsplit(value)
-        host = parsed.hostname or ""
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
-    except Exception:
-        return "(configured)"
-
-
-def _openh3ir_job_info(workflow: dict[str, Any]) -> dict[str, Any] | None:
-    compile_node = next(
-        (node for node in workflow.values() if isinstance(node, dict) and node.get("class_type") == "OpenH3IRCompile"),
-        None,
-    )
-    if not compile_node:
-        return None
-    media_node = next(
-        (node for node in workflow.values() if isinstance(node, dict) and node.get("class_type") == "OpenH3IRMedia"),
-        None,
-    )
-    images = 0
-    if media_node:
-        try:
-            tray = json.loads(str((media_node.get("inputs") or {}).get("tray") or "[]"))
-            images = sum(1 for item in tray if isinstance(item, dict) and item.get("kind") == "picture")
-        except (TypeError, ValueError):
-            pass
-    inputs = compile_node.get("inputs") or {}
-    return {"images": images, "duration": inputs.get("seconds")}
 MAX_INLINE_BYTES = int(os.getenv("H3_MAX_INLINE_INPUT_BYTES", str(16 * 1024 * 1024)))
 COMFY_START_TIMEOUT = int(os.getenv("H3_COMFY_START_TIMEOUT", "180"))
 POLL_SECONDS = float(os.getenv("H3_HISTORY_POLL_SECONDS", "1.0"))
@@ -374,73 +332,6 @@ def _export_artifacts(history: dict[str, Any], run_id: str) -> list[dict[str, An
     return artifacts
 
 
-def _history_text(history: dict[str, Any], node_id: str) -> str | None:
-    output = (history.get("outputs") or {}).get(str(node_id)) or {}
-    value = output.get("text")
-    if isinstance(value, (list, tuple)) and value:
-        value = value[0]
-    return value if isinstance(value, str) else None
-
-
-def _export_tagged_text_artifacts(
-    history: dict[str, Any], workflow: dict[str, Any], run_id: str
-) -> list[dict[str, Any]]:
-    """Export explicitly tagged PreviewAny text without coupling prompt compilation to the handler."""
-    collected: dict[str, str] = {}
-    for node_id, node in workflow.items():
-        if not isinstance(node, dict) or node.get("class_type") != "PreviewAny":
-            continue
-        title = str((node.get("_meta") or {}).get("title") or "")
-        if not title.startswith(TEXT_ARTIFACT_PREFIX):
-            continue
-        filename = title[len(TEXT_ARTIFACT_PREFIX):].strip()
-        if filename not in ALLOWED_TEXT_ARTIFACTS:
-            raise ValueError(f"unsupported tagged text artifact: {filename!r}")
-        text = _history_text(history, str(node_id))
-        if text is None:
-            raise RuntimeError(f"PreviewAny node {node_id} returned no text for {filename}")
-        collected[filename] = text
-
-    if "generation_metadata.json" in collected:
-        try:
-            metadata = json.loads(collected["generation_metadata.json"])
-        except json.JSONDecodeError as exc:
-            raise ValueError("generation_metadata.json is not valid JSON") from exc
-        if not isinstance(metadata, dict):
-            raise ValueError("generation_metadata.json must contain an object")
-        metadata["compiled_prompt"] = collected.get("compiled_prompt.txt", "")
-        metadata["timestamp"] = datetime.now(timezone.utc).isoformat()
-        if metadata.get("openh3ir_model") == "$H3IR_LLM_MODEL":
-            metadata["openh3ir_model"] = os.getenv("H3IR_LLM_MODEL", "")
-        if metadata.get("openh3ir_url") == "$H3IR_LLM_URL":
-            metadata["openh3ir_url"] = _safe_endpoint_for_log(os.getenv("H3IR_LLM_URL", ""))
-        forbidden = {"api_key", "key", "token", "secret", "authorization"}
-        if any(str(key).lower() in forbidden for key in metadata):
-            raise ValueError("generation metadata contains a forbidden secret-like field")
-        collected["generation_metadata.json"] = json.dumps(
-            metadata, ensure_ascii=False, indent=2
-        ) + "\n"
-
-    job_dir = (RESULT_ROOT / run_id).resolve()
-    job_dir.mkdir(parents=True, exist_ok=True)
-    artifacts: list[dict[str, Any]] = []
-    for filename, text in collected.items():
-        dest = (job_dir / filename).resolve()
-        if not _inside(job_dir, dest):
-            raise RuntimeError("unsafe text artifact destination")
-        dest.write_text(text, encoding="utf-8")
-        content_type = "application/json" if filename.endswith(".json") else "text/plain"
-        artifacts.append({
-            "filename": filename,
-            "source_filename": filename,
-            "key": dest.relative_to(VOLUME_ROOT).as_posix(),
-            "size": dest.stat().st_size,
-            "content_type": content_type,
-            "comfy_type": "output",
-        })
-    return artifacts
-
-
 def _cleanup_staged(paths: list[Path]) -> None:
     for path in paths:
         try:
@@ -486,26 +377,9 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         _cleanup_stale_volume_transport()
         _wait_for_comfy()
         staged = _stage_inputs(payload)
-        h3ir_info = _openh3ir_job_info(workflow)
-        if h3ir_info:
-            print("[H3IR] compiler enabled")
-            print(f"[H3IR] endpoint: {_safe_endpoint_for_log(os.getenv('H3IR_LLM_URL', ''))}")
-            print(f"[H3IR] model: {os.getenv('H3IR_LLM_MODEL', '') or '(not configured)'}")
-            print(f"[H3IR] input images: {h3ir_info['images']}")
-            print(f"[H3IR] duration: {h3ir_info['duration']}")
-            print("[H3IR] compile started")
-        print("[H3] workflow submitted; sampling starts after all compiler dependencies complete")
         prompt_id = _queue_prompt(workflow, uuid.uuid4().hex)
         history = _wait_for_history(prompt_id)
         artifacts = _export_artifacts(history, run_id)
-        text_artifacts = _export_tagged_text_artifacts(history, workflow, run_id)
-        artifacts.extend(text_artifacts)
-        if h3ir_info:
-            print("[H3IR] validation: PASS")
-            if os.getenv("H3IR_LOG_COMPILED_PROMPT", "0") == "1":
-                compiled = _history_text(history, "203")
-                if compiled:
-                    print("[H3IR] compiled prompt:\n" + compiled)
         return {
             "status": "completed",
             "prompt_id": prompt_id,

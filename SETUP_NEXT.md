@@ -1,29 +1,5 @@
 # Final rollout — existing RunPod infrastructure only
 
-## OpenH3-IR preflight (before any paid render)
-
-Set these environment variables on the existing endpoint/template; do not put them in workflow JSON or GitHub:
-
-```text
-H3IR_LLM_URL=<OpenAI-compatible URL ending in /v1>
-H3IR_LLM_MODEL=<vision model id returned by /v1/models>
-H3IR_LLM_API_KEY=<optional secret>
-H3IR_TIMEOUT_SECONDS=180
-H3IR_LOG_COMPILED_PROMPT=0
-```
-
-Run the non-rendering health check in the built container:
-
-```bash
-python /opt/h3/scripts/check_openh3ir.py
-```
-
-Do not submit `workflows/minimax_h3_i2v_openh3ir.api.json` unless all four lines say YES: installed, reachable/chat, model exists, and vision. A text-only model is not acceptable for reference-image tests.
-
-The worker negotiates the two audited optional request hints (`seed`, `chat_template_kwargs`) from explicit provider 400/422 diagnostics. This supports providers such as Gemini without a provider-name switch. A log line about a one-time compatibility retry is expected; any other rejected field or ambiguous error remains a hard OpenH3 failure. There is no raw-prompt fallback.
-
-For the first A/B test, stage exactly one source file as `openh3ir_test/input.png`. Run raw and compiled workflows with the same RunPod handler. Do not change seed, model, duration, resolution, steps, scheduler, VAE, encoder or sampler between them. Record measured results in `OPENH3IR_TEST_RESULTS.md`.
-
 No new Pod, endpoint, volume, or GPU is created.
 
 ## Server repo changes
