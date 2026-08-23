@@ -1,5 +1,40 @@
 # MiniMax H3 on RunPod Serverless — verified architecture
 
+## Optional OpenH3-IR I2V compiler
+
+The raw H3 path remains unchanged. A second API-format workflow is available for an A/B test:
+
+- `workflows/minimax_h3_i2v_raw.api.json`
+- `workflows/minimax_h3_i2v_openh3ir.api.json`
+
+The image, raw prompt, H3 FP8 checkpoint, sampler seed, duration, resolution, scheduler and 20 sampling steps are identical. The B arm changes only the prompt pipeline. It uses the official pinned [ComfyUI-OpenH3-IR](https://github.com/ruashots/ComfyUI-OpenH3-IR) node pack and [open-h3-ir](https://github.com/ruashots/open-h3-ir) compiler.
+
+OpenH3-IR does not load a vision model in this worker. Configure a separate OpenAI-compatible vision endpoint at runtime:
+
+```text
+H3IR_LLM_URL=https://vision-endpoint.example/v1
+H3IR_LLM_MODEL=vision-model-id
+H3IR_LLM_API_KEY=optional-secret
+H3IR_TIMEOUT_SECONDS=180
+H3IR_LOG_COMPILED_PROMPT=0
+```
+
+`H3IR_LLM_API_KEY` is mapped in memory to upstream's `H3IR_LLM_KEY`; it is never printed or written to an artifact. `H3IR_ALLOW_DEGRADED=0` is explicit, so an OpenH3 compilation failure cannot silently fall back to the raw prompt.
+
+The ordinary worker boot does not require these variables. Raw H3 workflows continue to run when they are absent. An OpenH3 workflow fails clearly at its compiler node.
+
+Before the first OpenH3 render, run inside the image:
+
+```bash
+python /opt/h3/scripts/check_openh3ir.py
+```
+
+Success requires `health=True`, `chat_ok=True`, the selected model in `model_ids`, and `vision_ok=True`; the wrapper does not trust the upstream doctor's exit code.
+
+The B workflow uses the upstream node's real API contract. `OpenH3IRCompile` returns the loaded model, conditioning, latent, VAEs and compiled prompt; upstream does not expose a compiler-only STRING node that can be placed immediately before `MiniMaxH3ImageToVideo`. Writing a local replacement node would fork upstream behavior, so the official outputs feed the existing sampler/decode/save tail instead.
+
+Tagged `PreviewAny` outputs make the handler save `raw_prompt.txt`, `compiled_prompt.txt`, `compile_report.txt`, and `generation_metadata.json` beside the MP4. The raw control saves the raw prompt as both raw and compiled text. No credentials are accepted in metadata.
+
 ## Fixed design
 
 Heavy model transfer never happens inside a paid GPU worker.

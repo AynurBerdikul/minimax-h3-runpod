@@ -12,6 +12,7 @@ on:
       - "tools/deploy_endpoint_image.py"
       - "extra_model_paths.yaml"
       - "model_manifest.json"
+      - "workflows/**"
       - ".github/workflows/build-ghcr.yml"
 
 permissions:
@@ -39,7 +40,15 @@ jobs:
           python -m py_compile \
             remote/handler-h3.py \
             scripts/validate_volume.py \
+            scripts/check_openh3ir.py \
+            scripts/test_handler_diagnostics.py \
+            scripts/validate_openh3ir_workflows.py \
             tools/deploy_endpoint_image.py
+
+      - name: Validate OpenH3-IR A/B workflows
+        run: |
+          python scripts/validate_openh3ir_workflows.py
+          python scripts/test_handler_diagnostics.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

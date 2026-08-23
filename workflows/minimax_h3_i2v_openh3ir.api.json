@@ -1,0 +1,240 @@
+{
+  "92": {
+    "inputs": {
+      "filename_prefix": "openh3ir_ab/compiled",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "105:91",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Сохранить видео"
+    }
+  },
+  "200": {
+    "inputs": {
+      "server": "",
+      "reference_model": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "frames_model": "minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
+      "text_encoder": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+      "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+      "weight_dtype": "default",
+      "timeout_s": 180,
+      "llm_url": "",
+      "llm_model": ""
+    },
+    "class_type": "OpenH3IRSetup",
+    "_meta": {
+      "title": "OpenH3-IR Setup (env endpoint)"
+    }
+  },
+  "201": {
+    "inputs": {
+      "tray": "[{\"kind\":\"picture\",\"label\":\"first-frame\",\"role\":\"frame_anchor_first\",\"file\":\"openh3ir_test/input.png [input]\",\"note\":\"the opening frame used by the same H3 I2V test\",\"transcript\":\"\",\"soundtrack\":\"off\",\"replaces\":\"\"}]"
+    },
+    "class_type": "OpenH3IRMedia",
+    "_meta": {
+      "title": "OpenH3-IR Media (same input image)"
+    }
+  },
+  "202": {
+    "inputs": {
+      "setup": [
+        "200",
+        0
+      ],
+      "media": [
+        "201",
+        0
+      ],
+      "intent": "The two children keep running quickly through deep snow. Their movement is natural and energetic. The camera follows closely behind them at low height.",
+      "seconds": 5,
+      "aspect": "9:16",
+      "creativity": "balanced",
+      "silent": false,
+      "shots": "1",
+      "megapixels": 0.4,
+      "spoken_language": "English",
+      "sizing": "max",
+      "seed": 7,
+      "effort": "max"
+    },
+    "class_type": "OpenH3IRCompile",
+    "_meta": {
+      "title": "OpenH3-IR Compile (balanced)"
+    }
+  },
+  "203": {
+    "inputs": {
+      "source": [
+        "202",
+        5
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "OPENH3IR_ARTIFACT:compiled_prompt.txt"
+    }
+  },
+  "204": {
+    "inputs": {
+      "source": [
+        "202",
+        6
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "OPENH3IR_ARTIFACT:compile_report.txt"
+    }
+  },
+  "105:23": {
+    "inputs": {
+      "samples": [
+        "105:14",
+        0
+      ],
+      "vae": [
+        "202",
+        4
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "Декодировать аудио VAE"
+    }
+  },
+  "105:10": {
+    "inputs": {
+      "samples": [
+        "105:14",
+        0
+      ],
+      "vae": [
+        "202",
+        3
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Декодировать VAE"
+    }
+  },
+  "105:17": {
+    "inputs": {
+      "sampler_name": "res_multistep"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "Выбор KSampler"
+    }
+  },
+  "105:9": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 20,
+      "denoise": 1,
+      "model": [
+        "202",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "Основной scheduler"
+    }
+  },
+  "105:14": {
+    "inputs": {
+      "noise": [
+        "105:15",
+        0
+      ],
+      "guider": [
+        "105:16",
+        0
+      ],
+      "sampler": [
+        "105:17",
+        0
+      ],
+      "sigmas": [
+        "105:9",
+        0
+      ],
+      "latent_image": [
+        "202",
+        2
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Пользовательский сэмплер (Расширенный)"
+    }
+  },
+  "105:16": {
+    "inputs": {
+      "model": [
+        "202",
+        0
+      ],
+      "conditioning": [
+        "202",
+        1
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Основной гид"
+    }
+  },
+  "105:15": {
+    "inputs": {
+      "noise_seed": 123
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "Случайный шум"
+    }
+  },
+  "105:91": {
+    "inputs": {
+      "fps": 24,
+      "bit_depth": 8,
+      "images": [
+        "105:10",
+        0
+      ],
+      "audio": [
+        "105:23",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Создать видео"
+    }
+  },
+  "205": {
+    "inputs": {
+      "source": "The two children keep running quickly through deep snow. Their movement is natural and energetic. The camera follows closely behind them at low height."
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "OPENH3IR_ARTIFACT:raw_prompt.txt"
+    }
+  },
+  "206": {
+    "inputs": {
+      "source": "{\"raw_prompt\":\"The two children keep running quickly through deep snow. Their movement is natural and energetic. The camera follows closely behind them at low height.\",\"compiled_prompt\":\"\",\"h3_model\":\"minimax_h3_fl2va_pruned_fp8_scaled.safetensors\",\"seed\":123,\"duration\":5,\"width\":480,\"height\":864,\"steps\":20,\"openh3ir_model\":\"$H3IR_LLM_MODEL\",\"openh3ir_url\":\"$H3IR_LLM_URL\",\"timestamp\":\"\"}"
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "OPENH3IR_ARTIFACT:generation_metadata.json"
+    }
+  }
+}
