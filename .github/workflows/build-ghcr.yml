@@ -41,6 +41,7 @@ jobs:
             remote/handler-h3.py \
             scripts/validate_volume.py \
             scripts/check_openh3ir.py \
+            scripts/test_openh3ir_provider_compat.py \
             scripts/test_handler_diagnostics.py \
             scripts/validate_openh3ir_workflows.py \
             tools/deploy_endpoint_image.py

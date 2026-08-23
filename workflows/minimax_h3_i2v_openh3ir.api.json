@@ -236,5 +236,14 @@
     "_meta": {
       "title": "OPENH3IR_ARTIFACT:generation_metadata.json"
     }
+  },
+  "207": {
+    "inputs": {
+      "image": "openh3ir_test/input.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Input staging marker for the RunPod handler"
+    }
   }
 }

@@ -28,11 +28,15 @@ PY
 
 # OpenH3-IR is pinned twice: the ComfyUI node pack and the compiler distribution it imports
 # lazily at execution time. The vision model remains outside this image behind H3IR_LLM_URL.
+COPY patches /opt/h3/patches
+
 RUN git clone --filter=blob:none https://github.com/ruashots/ComfyUI-OpenH3-IR.git \
       /comfyui/custom_nodes/ComfyUI-OpenH3-IR \
     && git -C /comfyui/custom_nodes/ComfyUI-OpenH3-IR checkout --detach "${OPENH3IR_COMFY_COMMIT}" \
     && git clone --filter=blob:none https://github.com/ruashots/open-h3-ir.git /tmp/open-h3-ir \
     && git -C /tmp/open-h3-ir checkout --detach "${OPENH3IR_CORE_COMMIT}" \
+    && git -C /tmp/open-h3-ir apply --check /opt/h3/patches/openh3ir-provider-compat.patch \
+    && git -C /tmp/open-h3-ir apply /opt/h3/patches/openh3ir-provider-compat.patch \
     && python -m pip install --no-cache-dir /tmp/open-h3-ir \
     && python -m pip install --no-cache-dir \
       -r /comfyui/custom_nodes/ComfyUI-OpenH3-IR/requirements.txt \
@@ -70,7 +74,8 @@ COPY scripts /opt/h3/scripts
 COPY remote/handler-h3.py /handler.py
 
 RUN chmod +x /opt/h3/scripts/entrypoint-h3.sh \
-    && python -m py_compile /handler.py /opt/h3/scripts/validate_volume.py
+    && python -m py_compile /handler.py /opt/h3/scripts/validate_volume.py \
+    && python /opt/h3/scripts/test_openh3ir_provider_compat.py
 
 ENV H3_MODEL_ROOT=/runpod-volume/models
 ENV H3IR_TIMEOUT_SECONDS=180

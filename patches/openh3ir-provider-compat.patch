@@ -1,0 +1,85 @@
+diff --git a/h3ir/backend.py b/h3ir/backend.py
+index 53839ec..dcb01d3 100644
+--- a/h3ir/backend.py
++++ b/h3ir/backend.py
+@@ -44,6 +44,13 @@ log = logging.getLogger("h3ir.backend")
+ # Ceiling for the truncation-retry ladder, so a looping model cannot multiply the wait.
+ MAX_GROWTH_BASE = 16000
+ 
++# OpenAI-compatible APIs do not share one request schema. These two fields are optional
++# transport hints used by the pinned compiler and can be omitted without changing the user
++# prompt, media, model selection or output validation. Required fields are deliberately absent:
++# an endpoint that rejects model/messages/max_tokens is incompatible and must fail loudly.
++COMPAT_OPTIONAL_FIELDS = frozenset(("seed", "chat_template_kwargs"))
++COMPAT_REFUSAL_STATUSES = frozenset((400, 422))
++
+ 
+ class BackendError(RuntimeError):
+     """Raised loudly. We never quietly downgrade: a caller cannot tell a good IR from a
+@@ -234,6 +241,7 @@ class Backend:
+         self._client = client
+         self._owns_client = client is None
+         self._resolved_model: str | None = None
++        self._unsupported_optional_fields: set[str] = set()
+ 
+     def model_id(self) -> str:
+         """The model id to send. Set by config, or discovered by `require_available`."""
+@@ -435,9 +443,26 @@ class Backend:
+         raise BackendError(f"chat failed after {retries + 1} attempt(s): {last}") from last
+ 
+     def _once(self, body: dict[str, Any]) -> Reply:
++        request_body = {k: v for k, v in body.items()
++                        if k not in self._unsupported_optional_fields}
+         t0 = time.time()
+-        r = self._http().post(f"{self.base_url()}/chat/completions", json=body,
++        r = self._http().post(f"{self.base_url()}/chat/completions", json=request_body,
+                               headers=self._headers())
++        unsupported = _unsupported_optional_fields(r.status_code, r.text, request_body)
++        if unsupported:
++            # Capability discovery is response-driven because there is no standard endpoint that
++            # describes the accepted OpenAI-compatible request fields. Retry exactly once, only
++            # after the provider explicitly names safe optional fields as invalid. Remember the
++            # result so later compiler stages do not pay another rejected request.
++            self._unsupported_optional_fields.update(unsupported)
++            log.warning(
++                "OpenAI-compatible endpoint rejected optional request field(s) %s; "
++                "retrying once without them",
++                ", ".join(sorted(unsupported)),
++            )
++            request_body = {k: v for k, v in request_body.items() if k not in unsupported}
++            r = self._http().post(f"{self.base_url()}/chat/completions", json=request_body,
++                                  headers=self._headers())
+         wall = time.time() - t0
+         if r.status_code >= 400:
+             raise EndpointRefused(r.status_code, r.text)
+@@ -110,5 +117,30 @@ def _server_sentence(body: str) -> str:
+     return text.strip()
+ 
+ 
++def _unsupported_optional_fields(status: int, response_text: str,
++                                 body: dict[str, Any]) -> tuple[str, ...]:
++    """Return optional top-level fields the provider explicitly says it cannot accept.
++
++    This is intentionally provider-neutral. There is no hostname or model-name switch: the
++    refusal itself is the capability signal. A field is removable only when it is both on the
++    small audited allowlist above and named by an ordinary unsupported/unknown-field diagnostic.
++    Ambiguous errors, auth failures and required-field failures pass through unchanged.
++    """
++    if status not in COMPAT_REFUSAL_STATUSES or not response_text:
++        return ()
++    text = _server_sentence(response_text)
++    found: list[str] = []
++    for field in sorted(COMPAT_OPTIONAL_FIELDS.intersection(body)):
++        quoted = re.escape(field)
++        patterns = (
++            rf"unknown\s+(?:name|field|parameter|argument)[^\n]{{0,80}}[\"']?{quoted}[\"']?",
++            rf"unrecognized\s+(?:request\s+)?(?:field|parameter|argument)[^\n]{{0,80}}[\"']?{quoted}[\"']?",
++            rf"[\"']?{quoted}[\"']?[^\n]{{0,80}}(?:is\s+)?(?:not\s+supported|not\s+permitted|extra_forbidden)",
++        )
++        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
++            found.append(field)
++    return tuple(found)
++
++
+ @dataclass
+ class Reply:

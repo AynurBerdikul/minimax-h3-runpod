@@ -45,6 +45,14 @@ def main() -> None:
     assert compiled["200"]["inputs"]["timeout_s"] == 180
     assert compiled["200"]["inputs"]["llm_url"] == ""
     assert compiled["200"]["inputs"]["llm_model"] == ""
+    assert compiled["207"]["class_type"] == "LoadImage"
+    assert compiled["207"]["inputs"]["image"] == "openh3ir_test/input.png"
+    assert "207" not in {
+        str(value[0])
+        for node in compiled.values()
+        for value in node["inputs"].values()
+        if isinstance(value, list) and len(value) == 2
+    }, "the staging marker must not alter the OpenH3/H3 execution graph"
     assert any(node["class_type"] == "OpenH3IRMedia" for node in compiled.values())
     assert any(node["class_type"] == "OpenH3IRCompile" for node in compiled.values())
     assert "H3IR_LLM_API_KEY" not in json.dumps(compiled)
