@@ -3,9 +3,9 @@
   "repo_revision": "main",
   "files": [
     {
-      "path": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-      "size": 20970379616,
-      "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+      "path": "diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
+      "size": 20958205608,
+      "sha256": "12944c1f7791637e7de12208aef04da82bd26b95271b1b47d817364315ade993"
     },
     {
       "path": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
@@ -28,5 +28,5 @@
       "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
     }
   ],
-  "total_bytes": 63440965087
+  "total_bytes": 63428791079
 }
