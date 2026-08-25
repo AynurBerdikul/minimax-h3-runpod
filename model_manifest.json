@@ -1,32 +1,52 @@
 {
-  "repo_id": "Comfy-Org/MiniMax-H3",
-  "repo_revision": "main",
+  "name": "Wan 2.2 VACE Fun A14B FP8 + Fun InP A14B FP8",
+  "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+  "repo_revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
   "files": [
     {
-      "path": "diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
-      "size": 20958205608,
-      "sha256": "12944c1f7791637e7de12208aef04da82bd26b95271b1b47d817364315ade993"
+      "path": "diffusion_models/wan2.2_fun_vace_high_noise_14B_fp8_scaled.safetensors",
+      "source": "split_files/diffusion_models/wan2.2_fun_vace_high_noise_14B_fp8_scaled.safetensors",
+      "size": 17346056104,
+      "sha256": "23130f30207f6c8697a5bead113ddc9904cfbb5e8fa51a550df3cee4d21fb54c"
     },
     {
-      "path": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-      "size": 20970379616,
-      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
+      "path": "diffusion_models/wan2.2_fun_vace_low_noise_14B_fp8_scaled.safetensors",
+      "source": "split_files/diffusion_models/wan2.2_fun_vace_low_noise_14B_fp8_scaled.safetensors",
+      "size": 17346056104,
+      "sha256": "ca55a5cc543e28576edbd2079f8c1de05f71cd9e85bf96fab635f55663dbcb69"
     },
     {
-      "path": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-      "size": 15687142551,
-      "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+      "path": "diffusion_models/wan2.2_fun_inpaint_high_noise_14B_fp8_scaled.safetensors",
+      "source": "split_files/diffusion_models/wan2.2_fun_inpaint_high_noise_14B_fp8_scaled.safetensors",
+      "size": 14294743520,
+      "sha256": "6106c137d8a921bc17d579c3e9deaa4fc4fadbc77fbe733f43ff19bb33ec3995"
     },
     {
-      "path": "vae/minimax_h3_video_vae_fp16.safetensors",
-      "size": 5207808496,
-      "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+      "path": "diffusion_models/wan2.2_fun_inpaint_low_noise_14B_fp8_scaled.safetensors",
+      "source": "split_files/diffusion_models/wan2.2_fun_inpaint_low_noise_14B_fp8_scaled.safetensors",
+      "size": 14294743520,
+      "sha256": "a3981f3e0f79c59fb3cffe1240ee34656bbc57e599101fac2b7140461037ab9c"
     },
     {
-      "path": "vae/minimax_h3_audio_vae_fp32.safetensors",
-      "size": 605254808,
-      "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+      "path": "text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "source": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "size": 6735906897,
+      "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68"
+    },
+    {
+      "path": "vae/wan_2.1_vae.safetensors",
+      "source": "split_files/vae/wan_2.1_vae.safetensors",
+      "size": 253815318,
+      "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b"
+    },
+    {
+      "path": "clip_vision/clip_vision_h.safetensors",
+      "repo_id": "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+      "repo_revision": "617a7633e636506f850e043bc4605f290a466a8e",
+      "source": "split_files/clip_vision/clip_vision_h.safetensors",
+      "size": 1264219396,
+      "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161"
     }
   ],
-  "total_bytes": 63428791079
+  "total_bytes": 71535540859
 }

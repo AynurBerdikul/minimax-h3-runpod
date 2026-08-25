@@ -3,7 +3,7 @@ FROM runpod/worker-comfyui:5.8.6-base
 
 USER root
 
-ARG COMFYUI_COMMIT=57500fc5bc92566a63f2046824f522cd55c335ca
+ARG COMFYUI_COMMIT=72865f4f27eaf5396f8f36370e0a2be3a9a090ee
 
 RUN git -C /comfyui fetch --depth=1 origin "${COMFYUI_COMMIT}" \
     && git -C /comfyui checkout --detach "${COMFYUI_COMMIT}"
@@ -30,9 +30,10 @@ COPY scripts /opt/h3/scripts
 COPY remote/handler-h3.py /handler.py
 
 RUN chmod +x /opt/h3/scripts/entrypoint-h3.sh \
-    && python -m py_compile /handler.py /opt/h3/scripts/validate_volume.py
+    && python -m py_compile /handler.py /opt/h3/scripts/validate_volume.py /opt/h3/scripts/populate_wan_volume.py
 
-ENV H3_MODEL_ROOT=/runpod-volume/models
+ENV WAN_MODEL_ROOT=/runpod-volume/models
+ENV WAN_BOOTSTRAP_VOLUME=1
 ENV PYTHONUNBUFFERED=1
 
 ENTRYPOINT ["/opt/h3/scripts/entrypoint-h3.sh"]

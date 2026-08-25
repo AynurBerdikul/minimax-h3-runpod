@@ -38,6 +38,7 @@ jobs:
         run: |
           python -m py_compile \
             remote/handler-h3.py \
+            scripts/populate_wan_volume.py \
             scripts/validate_volume.py \
             tools/deploy_endpoint_image.py
 
