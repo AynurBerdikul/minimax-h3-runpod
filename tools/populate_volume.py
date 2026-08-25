@@ -119,17 +119,21 @@ def discover_upload(s3, bucket: str, key: str, expected: int) -> tuple[str | Non
 
 
 def new_upload(s3, bucket: str, key: str, item: dict[str, Any]) -> str:
+    repo_id = item.get("repo_id", MANIFEST["repo_id"])
     response = s3.create_multipart_upload(
         Bucket=bucket,
         Key=key,
         ContentType="application/octet-stream",
-        Metadata={"sha256": item["sha256"], "source": MANIFEST["repo_id"]},
+        Metadata={"sha256": item["sha256"], "source": repo_id},
     )
     return str(response["UploadId"])
 
 
-def source_url(path: str) -> str:
-    return f"https://huggingface.co/{MANIFEST['repo_id']}/resolve/{MANIFEST['repo_revision']}/{path}"
+def source_url(item: dict[str, Any]) -> str:
+    repo_id = item.get("repo_id", MANIFEST["repo_id"])
+    revision = item.get("repo_revision", MANIFEST["repo_revision"])
+    source = item.get("source", item["path"])
+    return f"https://huggingface.co/{repo_id}/resolve/{revision}/{source}"
 
 
 def upload_one(s3, bucket: str, item: dict[str, Any]) -> None:
@@ -158,7 +162,7 @@ def upload_one(s3, bucket: str, item: dict[str, Any]) -> None:
         headers["Range"] = f"bytes={uploaded}-"
 
     print(f"{key}: resume {uploaded / 1024**3:.2f} / {expected / 1024**3:.2f} GiB")
-    with requests.get(source_url(path), headers=headers, stream=True, allow_redirects=True, timeout=(30, 600)) as response:
+    with requests.get(source_url(item), headers=headers, stream=True, allow_redirects=True, timeout=(30, 600)) as response:
         response.raise_for_status()
         if uploaded and response.status_code != 206:
             raise RuntimeError("Hugging Face did not honor Range request")
@@ -201,9 +205,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file")
     args = parser.parse_args()
-
-    if os.getenv("ACCEPT_MINIMAX_H3_LICENSE") != "YES":
-        raise SystemExit("Set ACCEPT_MINIMAX_H3_LICENSE=YES after reviewing the license.")
 
     items = MANIFEST["files"]
     if args.file:

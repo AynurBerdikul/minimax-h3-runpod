@@ -1,13 +1,21 @@
-name: Populate MiniMax H3 Network Volume
+name: Populate Wan 2.2 Network Volume
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "model_manifest.json"
+      - "tools/populate_volume.py"
+      - "tools/verify_volume.py"
+      - ".github/workflows/populate-volume.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: populate-minimax-h3-volume
+  group: populate-wan-2-2-volume
   cancel-in-progress: false
 
 jobs:
@@ -19,16 +27,20 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - label: FL2VA
-            file: diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors
-          - label: REF2VA
-            file: diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
-          - label: Qwen
-            file: text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
-          - label: VideoVAE
-            file: vae/minimax_h3_video_vae_fp16.safetensors
-          - label: AudioVAE
-            file: vae/minimax_h3_audio_vae_fp32.safetensors
+          - label: VACE-high
+            file: diffusion_models/wan2.2_fun_vace_high_noise_14B_fp8_scaled.safetensors
+          - label: VACE-low
+            file: diffusion_models/wan2.2_fun_vace_low_noise_14B_fp8_scaled.safetensors
+          - label: InP-high
+            file: diffusion_models/wan2.2_fun_inpaint_high_noise_14B_fp8_scaled.safetensors
+          - label: InP-low
+            file: diffusion_models/wan2.2_fun_inpaint_low_noise_14B_fp8_scaled.safetensors
+          - label: UMT5
+            file: text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+          - label: VAE
+            file: vae/wan_2.1_vae.safetensors
+          - label: CLIP-Vision
+            file: clip_vision/clip_vision_h.safetensors
 
     env:
       RUNPOD_S3_ACCESS_KEY: ${{ secrets.RUNPOD_S3_ACCESS_KEY }}
@@ -37,8 +49,6 @@ jobs:
       RUNPOD_S3_ENDPOINT: ${{ secrets.RUNPOD_S3_ENDPOINT }}
       RUNPOD_S3_REGION: ${{ secrets.RUNPOD_S3_REGION }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      ACCEPT_MINIMAX_H3_LICENSE: "YES"
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
